@@ -1,0 +1,5 @@
+numpy>=1.16
+demquery>=0.3.0
+GDAL>=3.0.0
+maplotlib>=3.0.0
+
