@@ -17,11 +17,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-import argparse, math, numpy
+import argparse, math, numpy as np
 from lxml import etree
 from demquery import Query
 from osgeo import ogr, osr
-from matplotlib import pyplot
+from matplotlib import pyplot as plt
+from matplotlib.collections import LineCollection
+from matplotlib.colors import ListedColormap, BoundaryNorm
 
 # Tracks class from hikingmap, slightly modified (see MODIFIED comments)
 # This class may be removed from future versions in favour of the hikingmap.Tracks class,
@@ -249,34 +251,56 @@ def main():
     for (index, track_waypoints) in enumerate(tracks.waypoints):
         print("Profile track %d" % index)
         
-        ### from https://www.geodose.com/2018/03/create-elevation-profile-generator-python.html
         # TODO generate SVG in stead
-        # TODO color by steepness (altitude is already visible)
-        elev_list = query.query_points([ reproject(wpt[0], coord_trans) for wpt in track_waypoints ], interp_kind='linear')
-        d_list_rev = list()
-        for waypt in track_waypoints:
-            d_list_rev.append(float(waypt[1]))
+        dist_list = [ float(wpt[1]) for wpt in track_waypoints ]
+        elev_list = query.query_points([ reproject(wpt[0], coord_trans) for wpt in track_waypoints ], \
+                                       interp_kind='linear')
+        slope_list = [ ]
+        for (index, wpt) in enumerate(track_waypoints[1:]):
+            slope_list.append((elev_list[index+1] - elev_list[index]) / \
+                              ((dist_list[index+1] - dist_list[index]) * 10))
+                              # factor 1000 for conversion from km to m, factor 100 for percentage
+        slopes = np.asarray(slope_list, dtype=np.float32)
+        
+        # Create a set of line segments so that we can color them individually
+        # This creates the points as a N x 1 x 2 array so that we can stack points
+        # together easily to get the segments. The segments array for line collection
+        # needs to be (numlines) x (points per line) x 2 (for x and y)
+        points = np.array([dist_list, elev_list]).T.reshape(-1, 1, 2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
         
         mean_elev=round((sum(elev_list)/len(elev_list)),3)
         min_elev=min(elev_list)
         max_elev=max(elev_list)
-        distance=d_list_rev[-1]
+        distance=dist_list[-1]
         
-        base_reg=0
-        pyplot.figure(figsize=(50,4))
-        pyplot.plot(d_list_rev,elev_list)
-        pyplot.plot([0,distance],[min_elev,min_elev],'--g',label='min: '+str(min_elev)+' m')
-        pyplot.plot([0,distance],[max_elev,max_elev],'--r',label='max: '+str(max_elev)+' m')
-        pyplot.plot([0,distance],[mean_elev,mean_elev],'--y',label='ave: '+str(mean_elev)+' m')
-        pyplot.fill_between(d_list_rev,elev_list,base_reg,alpha=0.1)
-        #pyplot.text(d_list_rev[0],elev_list[0],"P1")
-        #pyplot.text(d_list_rev[-1],elev_list[-1],"P2")
-        pyplot.xlabel("Distance(km)")
-        pyplot.ylabel("Elevation(m)")
-        pyplot.grid()
-        pyplot.legend(fontsize='small')
-        pyplot.xticks(numpy.arange(0, int(distance)+1, max(int(distance/20), 1)))
-        pyplot.show()
+        fig, ax = plt.subplots(figsize=(50, 4), tight_layout=True)
+
+        # Create a continuous norm to map from data points to colors
+        #norm_boundary = max(abs(slopes.min()), abs(slopes.max()))
+        norm = plt.Normalize(slopes.min(), slopes.max())
+        colors = [ (r, 1-r, 0) for r in np.hstack((np.log(np.arange(np.e, 1, (np.e-1)/slopes.min())), \
+                                                   np.log(np.arange(1, np.e, (np.e-1)/slopes.max())))) ]
+        cmap = ListedColormap(colors)
+        lc = LineCollection(segments, cmap=cmap, norm=norm)
+        # Set the values used for colormapping
+        lc.set_array(slopes)
+        lc.set_linewidth(2)
+        line = ax.add_collection(lc)
+        fig.colorbar(line, ax=ax) # draw slope angle legend
+
+        plt.xlabel("Distance(km)")
+        plt.ylabel("Elevation(m)")
+        plt.fill_between(dist_list, elev_list, 0, alpha=0.1)
+        plt.xticks(np.arange(0, int(distance)+1, max(int(distance/20), 1)))
+        plt.grid()
+
+        plt.plot([0,distance], [min_elev,min_elev], '--g', label='min: %.2f m' % min_elev)
+        plt.plot([0,distance], [max_elev,max_elev], '--r', label='max: %.2f m' % max_elev)
+        plt.plot([0,distance], [mean_elev,mean_elev], '--y', label='ave: %.2f m' % mean_elev)
+        plt.legend(fontsize='small')
+
+        plt.show()
 
 
 if __name__ == '__main__':
